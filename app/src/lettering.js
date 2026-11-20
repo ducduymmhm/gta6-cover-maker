@@ -52,7 +52,9 @@ export function fitStackedTitle(ctx, text, box) {
   const smallest = Math.min(...sizes);
   sizes = sizes.map((s) => Math.min(s, smallest * MAX_LINE_SIZE_RATIO));
   const blockHeight = (list) => list.reduce((sum, s, i) => sum + s * capRatio * (i < list.length - 1 ? 1 + LINE_GAP : 1), 0);
-  const fit = Math.min(1, box.h / blockHeight(sizes));
+  // A single short line would otherwise fill the whole box height; keep it to a poster-like proportion.
+  const heightBudget = lines.length === 1 ? box.h * 0.62 : box.h;
+  const fit = Math.min(1, heightBudget / blockHeight(sizes));
   sizes = sizes.map((s) => s * fit);
   return { lines, sizes, capRatio, unitWidths, height: blockHeight(sizes) };
 }
