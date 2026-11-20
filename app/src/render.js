@@ -1,24 +1,32 @@
-// renderCover: the whole cover, in order: photos in their tilted panels, gradient-map grade, sky wash, light leaks,
-// halftone, bloom, dark gutters and frame, title shade, title lettering, tagline, badge and film grain. The same
-// function draws the live preview (at a reduced size) and the full-resolution export.
+// renderCover: the whole key-art cover, in order: photos in their tilted cast-grid panels, gradient-map grade, sky
+// wash, light leaks, halftone, bloom, the dark poster ground, the fade into the title zone, role tags, the review
+// banner, the stacked title and script tagline, the billing block (seal, credits, release line, barcode) and film
+// grain. The same function draws the live preview (at a reduced size) and the full-resolution export.
 import { computePanelGeometry, findLayout, tracePolygon } from './layouts.js';
 import { findGrade } from './grades.js';
+import { addBloomGlow, addFilmGrain, applyColorGrade, applyHalftone, applySkyWash, drawPanelLightLeaks } from './effects.js';
+import { drawStripedTitle, drawTaglineScript } from './lettering.js';
 import {
-  addBloomGlow, addFilmGrain, applyColorGrade, applyHalftone, applySkyWash, drawPanelLightLeaks, drawTitleShade,
-} from './effects.js';
-import { drawOriginalBadge, drawTaglineScript, drawTitleLettering } from './lettering.js';
-
-const TITLE_POSITIONS = { top: 0.22, center: 0.5, bottom: 0.79 };
+  computeKeyArtFrame, drawBillingBlock, drawKeyArtBackdrop, drawReviewBanner, drawRoleTags, drawSealBadge,
+  drawTitleHaze, fadePanelBottoms,
+} from './keyart.js';
 
 /** Cover size presets: the three common post sizes. */
 export const COVER_SIZES = [
-  { id: 'square', name: 'Square', w: 1080, h: 1080 },
-  { id: 'portrait', name: 'Portrait', w: 1080, h: 1350 },
   { id: 'landscape', name: 'Landscape', w: 1920, h: 1080 },
+  { id: 'portrait', name: 'Portrait', w: 1080, h: 1350 },
+  { id: 'square', name: 'Square', w: 1080, h: 1080 },
 ];
 
 export function findSize(id) {
   return COVER_SIZES.find((size) => size.id === id) ?? COVER_SIZES[0];
+}
+
+/** The cover plan and the cast-grid geometry for a scene at w x h (shared by the renderer and the editor). */
+export function computeCoverGeometry(scene, w, h) {
+  const plan = computeKeyArtFrame(scene, w, h);
+  const geometry = computePanelGeometry(findLayout(scene.layoutId), plan.area, plan.gutter);
+  return { plan, geometry };
 }
 
 /** Where a photo lands in a panel: cover-fit to the panel's bounding box, then the panel's zoom and pan. */
@@ -43,15 +51,15 @@ export function computePhotoPlacement(img, box, crop) {
 /** A stand-in for an empty panel: a soft diagonal gradient the grade turns into a sunset sky. */
 function drawEmptyPanel(ctx, box, index, unit) {
   const g = ctx.createLinearGradient(box.x, box.y, box.x + box.w * 0.4, box.y + box.h);
-  g.addColorStop(0, `hsl(0 0% ${78 - index * 6}%)`);
-  g.addColorStop(1, `hsl(0 0% ${18 + index * 4}%)`);
+  g.addColorStop(0, `hsl(0 0% ${78 - (index % 6) * 6}%)`);
+  g.addColorStop(1, `hsl(0 0% ${18 + (index % 6) * 4}%)`);
   ctx.fillStyle = g;
   ctx.fillRect(box.x, box.y, box.w, box.h);
   ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.font = `${Math.round(30 * unit)}px "Anton"`;
+  ctx.font = `${Math.round(Math.min(30 * unit, box.w * 0.16))}px "Anton"`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`PHOTO ${index + 1}`, box.x + box.w / 2, box.y + box.h / 2);
+  ctx.fillText(`PHOTO ${index + 1}`, box.x + box.w / 2, box.y + box.h * 0.45);
 }
 
 /** Draws every panel's photo (or placeholder) clipped to its tilted polygon. */
@@ -77,21 +85,24 @@ export function drawPanelGrid(ctx, geometry, scene, unit) {
   });
 }
 
+/** The role tag each panel shows: its own edited tag, else its photo's role on the photo's first panel. */
+export function resolveRoleTags(scene) {
+  if (!scene.showTags) return [];
+  return scene.panels.map((crop) => {
+    if (crop.tag != null) return crop.tag;
+    const photo = crop.photo == null ? null : scene.photos[crop.photo];
+    return photo && crop.look === 0 ? photo.role ?? '' : '';
+  });
+}
+
 /**
  * Renders the cover described by `scene` onto `ctx` at w x h. Returns the panel geometry (for hit-testing and
  * the selection outline in the editor).
  */
 export function renderCover(ctx, scene, w, h) {
-  const unit = Math.min(w, h) / 1080;
-  const layout = findLayout(scene.layoutId);
   const grade = findGrade(scene.gradeId);
-  const frame = Math.round(14 * unit);
-  const gutter = Math.round(12 * unit);
-  const geometry = computePanelGeometry(layout, w, h, frame, gutter);
-  if (scene.titlePos !== 'auto') geometry.title.cy = TITLE_POSITIONS[scene.titlePos] * h;
-  // Keep the title poster-sized but never so big it buries the hero panel.
-  if (w / h > 1.4) { geometry.title.w = w * 0.68; geometry.title.h = h * 0.36; }
-  if (h > w) { geometry.title.w = w * 0.84; geometry.title.h = h * 0.25; }
+  const { plan, geometry } = computeCoverGeometry(scene, w, h);
+  const { unit } = plan;
 
   ctx.save();
   ctx.clearRect(0, 0, w, h);
@@ -106,18 +117,20 @@ export function renderCover(ctx, scene, w, h) {
   drawPanelLightLeaks(ctx, geometry.panels, grade, scene.glow);
   applyHalftone(ctx, w, h, luma, unit, grade, scene.halftone * 0.55, geometry.panels);
   addBloomGlow(ctx, w, h, unit, scene.glow);
+  fadePanelBottoms(ctx, w, plan);
+  drawKeyArtBackdrop(ctx, w, h, plan, grade);
+  drawTitleHaze(ctx, w, plan, grade);
+  drawRoleTags(ctx, geometry, resolveRoleTags(scene), grade, unit);
+  if (plan.banner) drawReviewBanner(ctx, plan.banner, scene, grade, unit);
 
-  ctx.globalCompositeOperation = 'destination-over';
-  ctx.fillStyle = grade.gutter;
-  ctx.fillRect(0, 0, w, h);
-  ctx.globalCompositeOperation = 'source-over';
-
-  if (scene.caption.trim()) drawTitleShade(ctx, w, h, geometry.title);
-  const title = drawTitleLettering(ctx, scene.caption, geometry.title, grade, unit);
-  drawTaglineScript(ctx, scene.tagline, title, w, h, grade, unit);
-  if (scene.badge.trim()) {
-    const r = 62 * unit;
-    drawOriginalBadge(ctx, frame + gutter + r * 1.15, frame + gutter + r * 1.15, r, scene.badge, grade);
+  const title = drawStripedTitle(ctx, scene.caption, plan.title, grade, unit);
+  const taglineFloor = plan.billing ? plan.billing.y + 4 * unit : h - plan.frame;
+  drawTaglineScript(ctx, scene.tagline, title, w, h, grade, unit, taglineFloor);
+  if (plan.billing) {
+    drawBillingBlock(ctx, plan.billing, scene, grade, unit);
+  } else if (scene.showSeal && scene.badge.trim()) {
+    const r = 58 * unit;
+    drawSealBadge(ctx, plan.area.x + r * 1.25, plan.area.y + r * 1.25, r, scene.badge, grade, unit);
   }
   addFilmGrain(ctx, w, h, unit, scene.grain);
   ctx.restore();

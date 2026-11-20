@@ -1,8 +1,10 @@
 // Heatwave Cover Studio, a gta6-cover-art-01 entry (Node 22, standard library only). The app is app/: plain static
 // files a desktop browser loads offline (index.html, ES modules under app/src/, two OFL fonts under app/fonts/,
-// no library and no network request). It turns the user's own photos and a caption into multi-panel crime-saga
-// poster art (tilted panel grids, gradient-map sunset/neon grades, halftone, glow, grain, extruded title lettering)
-// and exports 1080x1080, 1080x1350 or 1920x1080 PNGs. This program hands it in: it copies app/ and screenshots/
+// no library and no network request). It turns the user's own photos and a caption into movie key-art covers: a
+// tilted cast grid of up to 8 panels (one photo per person, dealt automatically), role tags, a review banner with
+// stars, a stacked chrome-and-sunset-striped title with a neon script tagline, a billing block with release line,
+// seal and barcode, gradient-map sunset/neon grades, halftone, glow and grain; and exports 1080x1080, 1080x1350
+// or 1920x1080 PNGs. This program hands it in: it copies app/ and screenshots/
 // from beside this file to /output and writes /output/dossier.json with the vendored make.fun library. It reads no
 // clock, no randomness and no network, so two runs write the same bytes.
 //

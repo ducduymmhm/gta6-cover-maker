@@ -184,18 +184,3 @@ export function addFilmGrain(ctx, w, h, unit, amount) {
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
 }
-
-/** Darkens the band behind the title so the lettering reads over any photo. */
-export function drawTitleShade(ctx, w, h, title) {
-  const top = title.cy - title.h * 0.9;
-  const bottom = title.cy + title.h * 0.9;
-  const shade = ctx.createLinearGradient(0, top, 0, bottom);
-  shade.addColorStop(0, 'rgba(0,0,0,0)');
-  shade.addColorStop(0.5, 'rgba(0,0,0,0.42)');
-  shade.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.save();
-  ctx.globalCompositeOperation = 'multiply';
-  ctx.fillStyle = shade;
-  ctx.fillRect(0, top, w, bottom - top);
-  ctx.restore();
-}

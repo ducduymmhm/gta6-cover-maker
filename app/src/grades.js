@@ -15,6 +15,9 @@ export const GRADE_PRESETS = [
     titleFill: ['#fffbe8', '#ffd25e', '#ff5a8a'],
     titleShadow: '#6d0f4e',
     titleGlow: '#ff4f9a',
+    titleChrome: ['#ffffff', '#ffe4f2', '#c25aa6'],
+    titleSun: ['#fff27a', '#ff9a3d', '#ff2f7d'],
+    titleStripe: '#2c0634',
     tagline: '#7ff3ff',
     taglineGlow: '#00c8ff',
     halftoneInk: '#3a0838',
@@ -31,6 +34,9 @@ export const GRADE_PRESETS = [
     titleFill: ['#ffffff', '#7ff6ff', '#ff3fc8'],
     titleShadow: '#3a0a7a',
     titleGlow: '#19e3ff',
+    titleChrome: ['#ffffff', '#c9faff', '#2f9fd6'],
+    titleSun: ['#ffe8ff', '#ff5fd2', '#8a2cff'],
+    titleStripe: '#14052e',
     tagline: '#ff5fd2',
     taglineGlow: '#ff2fb4',
     halftoneInk: '#120430',
@@ -47,6 +53,9 @@ export const GRADE_PRESETS = [
     titleFill: ['#ffffff', '#ffe0d2', '#ff7f9e'],
     titleShadow: '#1a5a72',
     titleGlow: '#ff9fb2',
+    titleChrome: ['#ffffff', '#e4fbff', '#4fb3c6'],
+    titleSun: ['#fff6c2', '#ffa894', '#ff5f8a'],
+    titleStripe: '#0f3248',
     tagline: '#fff2a8',
     taglineGlow: '#ff6f91',
     halftoneInk: '#0c2a3d',
@@ -63,6 +72,9 @@ export const GRADE_PRESETS = [
     titleFill: ['#fffaf0', '#ffd36e', '#ff7a2f'],
     titleShadow: '#5a1d05',
     titleGlow: '#ff9a3d',
+    titleChrome: ['#fffaf0', '#ffe8b4', '#c4741f'],
+    titleSun: ['#fff27a', '#ffae3a', '#ff4d2a'],
+    titleStripe: '#3e1205',
     tagline: '#ffffff',
     taglineGlow: '#ff7a2f',
     halftoneInk: '#3a1204',
@@ -79,6 +91,9 @@ export const GRADE_PRESETS = [
     titleFill: ['#ffffff', '#f2f2f2', '#d6d6d6'],
     titleShadow: '#b3122e',
     titleGlow: '#ff2246',
+    titleChrome: ['#ffffff', '#e8e8e8', '#8a8a8a'],
+    titleSun: ['#ffffff', '#ff4a66', '#a3001e'],
+    titleStripe: '#000000',
     tagline: '#ff2a4d',
     taglineGlow: '#ff0033',
     halftoneInk: '#000000',
@@ -92,6 +107,20 @@ export function findGrade(id) {
 export function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Linear mix of two #rrggbb colours (t = 0 gives a, 1 gives b), as an rgb() string. */
+export function mixHexColors(a, b, t) {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const c = ca.map((v, i) => Math.round(v + (cb[i] - v) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/** A #rrggbb colour with an alpha, as an rgba() string. */
+export function hexWithAlpha(hex, alpha) {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 /** A 256-entry RGB lookup table interpolating the preset's gradient-map stops. */

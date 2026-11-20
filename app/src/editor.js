@@ -3,48 +3,78 @@
 // layout, grade and size, and exports the cover as a full-resolution PNG.
 import { PANEL_LAYOUTS, computePanelGeometry, findLayout, pointInPolygon, tracePolygon } from './layouts.js';
 import { GRADE_PRESETS } from './grades.js';
-import { COVER_SIZES, computePhotoPlacement, findSize, renderCover } from './render.js';
+import { COVER_SIZES, computeCoverGeometry, computePhotoPlacement, findSize, renderCover, resolveRoleTags } from './render.js';
 import { loadLetteringFonts } from './lettering.js';
+import { DEFAULT_ROLE_TAGS } from './keyart.js';
 
 const PREVIEW_LONG_SIDE = 1200;
 const SAMPLE_PHOTOS = ['samples/boulevard.jpg', 'samples/pier.jpg'];
-// Crops given to the panels when one photo fills several, so the grid reads as different shots: a zoom and the
-// point of the photo (fx, fy as fractions) to centre. People photos keep the face in the upper-middle third, so
-// the close-ups aim there.
-const HERO_CROP = { zoom: 1, fx: 0.5, fy: 0.42 };
-const FIRST_LOOK_CROP = { zoom: 1.1, fx: 0.5, fy: 0.38 };
-const CROP_VARIETY = [
-  { zoom: 2.1, fx: 0.5, fy: 0.25 },
-  { zoom: 1.35, fx: 0.45, fy: 0.42 },
-  { zoom: 1.8, fx: 0.55, fy: 0.3 },
-  { zoom: 1.6, fx: 0.42, fy: 0.22 },
-  { zoom: 1.2, fx: 0.6, fy: 0.36 },
+// Automatic crops: a zoom and the point of the photo (fx, fy as fractions) to centre in the panel. People photos
+// keep the face in the upper-middle third, so the hero and first looks aim there. When there are more panels
+// than photos, each repeat of a photo takes a "second look" from a different part of the frame (a prop or car in
+// the lower corner, a sign or palms in the upper corner, a tight close-up of the face), so no two panels show the
+// same shot.
+const HERO_CROP = { zoom: 1, fx: 0.5, fy: 0.4 };
+const FIRST_LOOK_CROP = { zoom: 1.1, fx: 0.5, fy: 0.36 };
+const SECOND_LOOK_CROPS = [
+  { zoom: 2.0, fx: 0.8, fy: 0.78 },
+  { zoom: 1.7, fx: 0.24, fy: 0.16 },
+  { zoom: 1.9, fx: 0.5, fy: 0.3 },
+  { zoom: 1.8, fx: 0.44, fy: 0.27 },
 ];
 
-/** Converts a focus crop into the panel's pan values, so the chosen point of the photo sits at the panel centre. */
-function applyFocusCrop(panelIndex, photoIndex, { zoom, fx, fy }, flip) {
+/**
+ * Converts a focus crop into the panel's pan values, so the chosen point of the photo sits at the panel centre.
+ * The focus is kept on the crop, so a size or layout change can re-aim it while the user has not reframed it.
+ */
+function applyFocusCrop(panelIndex, photoIndex, focus, flip) {
   const crop = scene.panels[panelIndex];
-  Object.assign(crop, { photo: photoIndex, zoom, panX: 0, panY: 0, flip });
-  const photo = scene.photos[photoIndex];
+  Object.assign(crop, { photo: photoIndex, zoom: focus.zoom, panX: 0, panY: 0, flip, focus });
+  aimCropAtFocus(panelIndex);
+}
+
+/** Sets a panel's pan so its stored focus point lands at the panel centre, at the current size and layout. */
+function aimCropAtFocus(panelIndex) {
+  const crop = scene.panels[panelIndex];
+  const photo = scene.photos[crop.photo];
+  if (!photo || !crop.focus) return;
   const { w, h } = previewSize();
-  const box = computePanelGeometry(findLayout(scene.layoutId), w, h, 0, 0).panels[panelIndex].box;
+  const box = computeCoverGeometry(scene, w, h).geometry.panels[panelIndex].box;
+  crop.panX = 0;
+  crop.panY = 0;
   const place = computePhotoPlacement(photo.img, box, crop);
   const clamp = (v) => Math.max(-1, Math.min(1, v));
-  const focusX = flip ? 1 - fx : fx;
+  const focusX = crop.flip ? 1 - crop.focus.fx : crop.focus.fx;
   if (place.slackX > 0.5) crop.panX = clamp((box.w / 2 - focusX * place.w + place.slackX / 2) / (place.slackX / 2));
-  if (place.slackY > 0.5) crop.panY = clamp((box.h / 2 - fy * place.h + place.slackY / 2) / (place.slackY / 2));
+  if (place.slackY > 0.5) crop.panY = clamp((box.h / 2 - crop.focus.fy * place.h + place.slackY / 2) / (place.slackY / 2));
+}
+
+/** Re-aims every panel still on its automatic crop (after a size change moves the panel shapes). */
+function reaimAutomaticCrops() {
+  scene.panels.forEach((crop, i) => { if (crop.focus) aimCropAtFocus(i); });
 }
 
 const scene = {
   photos: [],
   panels: [],
-  layoutId: 'five',
+  layoutId: 'eight',
   gradeId: 'sunset',
   sizeId: 'landscape',
   caption: 'Sunset Heist',
   tagline: 'Only in Palm Coast',
   badge: 'HW',
   titlePos: 'auto',
+  showBanner: true,
+  quote: 'A sun-soaked, neon-drenched thrill ride',
+  quoteSource: 'Palm Coast Herald',
+  stars: 5,
+  showTags: true,
+  showBilling: true,
+  credits: 'Heatwave Pictures presents in association with Neon Tide a Palm Coast production\n'
+    + 'starring The Driver The Mechanic The Lookout The Boss music by Night Signal edited by J. Park directed by M. Vale',
+  release: 'Coming soon',
+  showSeal: true,
+  showBarcode: true,
   gradeStrength: 1,
   glow: 0.6,
   halftone: 0.5,
@@ -65,38 +95,45 @@ function setStatus(text) {
 
 /** Keeps one crop record per panel of the current layout, defaulting new ones to the hero-first photo order. */
 function ensurePanelCrops() {
-  const count = findLayout(scene.layoutId).cells.length;
-  while (scene.panels.length < count) scene.panels.push({ photo: null, zoom: 1, panX: 0, panY: -0.2, flip: false });
+  const count = findLayout(scene.layoutId).count;
+  while (scene.panels.length < count) scene.panels.push({ photo: null, zoom: 1, panX: 0, panY: -0.2, flip: false, look: 0 });
   scene.panels.length = count;
   scene.selected = Math.min(scene.selected, count - 1);
 }
 
 /** Panel indices with the hero first, so the first photo always lands in the biggest panel. */
 function panelsHeroFirst() {
-  const layout = findLayout(scene.layoutId);
-  const order = scene.panels.map((_, i) => i).filter((i) => i !== layout.hero);
-  return [layout.hero, ...order];
+  const { w, h } = previewSize();
+  const { hero } = computeCoverGeometry(scene, w, h).geometry;
+  const order = scene.panels.map((_, i) => i).filter((i) => i !== hero);
+  return [hero, ...order];
 }
 
-/** Fills every panel with one photo, giving the smaller panels varied close-up crops. */
+/** Fills every panel with one photo: the hero framed whole, the rest as distinct close-ups and details. */
 export function fillAllPanelsWithPhoto(photoIndex) {
   panelsHeroFirst().forEach((panelIndex, k) => {
-    const crop = k === 0 ? HERO_CROP : CROP_VARIETY[(k - 1) % CROP_VARIETY.length];
-    applyFocusCrop(panelIndex, photoIndex, crop, k % 3 === 2);
+    const crop = k === 0 ? HERO_CROP : SECOND_LOOK_CROPS[(k - 1) % SECOND_LOOK_CROPS.length];
+    applyFocusCrop(panelIndex, photoIndex, crop, false);
+    Object.assign(scene.panels[panelIndex], { look: k, tag: undefined });
   });
 }
 
-/** Deals all loaded photos across the panels, hero first; with one photo it falls back to varied crops. */
+/**
+ * Deals the loaded photos across the panels, hero first: one photo per panel, so every person gets their own
+ * panel, and only when there are more panels than photos does a photo come round again, as a different shot.
+ * Resets the role tags to each photo's role on its first panel.
+ */
 export function spreadPhotosAcrossPanels() {
   if (scene.photos.length === 0) return;
   if (scene.photos.length === 1) { fillAllPanelsWithPhoto(0); return; }
   panelsHeroFirst().forEach((panelIndex, k) => {
     const photo = k % scene.photos.length;
     const round = Math.floor(k / scene.photos.length);
-    let crop = CROP_VARIETY[(k + round) % CROP_VARIETY.length];
+    let crop = SECOND_LOOK_CROPS[(photo + round - 1) % SECOND_LOOK_CROPS.length];
     if (k === 0) crop = HERO_CROP;
     else if (round === 0) crop = FIRST_LOOK_CROP;
-    applyFocusCrop(panelIndex, photo, crop, round % 2 === 1);
+    applyFocusCrop(panelIndex, photo, crop, false);
+    Object.assign(scene.panels[panelIndex], { look: round, tag: undefined });
   });
 }
 
@@ -116,7 +153,7 @@ export async function addPhotoFiles(files) {
   for (const file of images) {
     try {
       const img = await loadImage(URL.createObjectURL(file));
-      scene.photos.push({ name: file.name, img });
+      scene.photos.push({ name: file.name, img, role: DEFAULT_ROLE_TAGS[scene.photos.length % DEFAULT_ROLE_TAGS.length] });
     } catch {
       setStatus(`Skipped ${file.name}: not a readable image.`);
     }
@@ -127,7 +164,10 @@ export async function addPhotoFiles(files) {
 }
 
 async function addSamplePhotos() {
-  for (const url of SAMPLE_PHOTOS) scene.photos.push({ name: url.split('/').pop(), img: await loadImage(url) });
+  for (const url of SAMPLE_PHOTOS) {
+    const role = DEFAULT_ROLE_TAGS[scene.photos.length % DEFAULT_ROLE_TAGS.length];
+    scene.photos.push({ name: url.split('/').pop(), img: await loadImage(url), role });
+  }
   spreadPhotosAcrossPanels();
   refreshEditor();
 }
@@ -210,14 +250,35 @@ export function exportPng() {
 
 function drawLayoutThumbnail(canvas, layout) {
   const ctx = canvas.getContext('2d');
-  const { panels } = computePanelGeometry(layout, canvas.width, canvas.height, 3, 3);
+  const area = { x: 3, y: 3, w: canvas.width - 6, h: canvas.height - 6 };
+  const { panels, hero } = computePanelGeometry(layout, area, 3);
   ctx.fillStyle = '#07040a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   panels.forEach(({ polygon }, i) => {
     tracePolygon(ctx, polygon);
-    ctx.fillStyle = i === layout.hero ? '#ff4f9a' : ['#ffb347', '#7b3cff', '#3fe0e8'][i % 3];
+    ctx.fillStyle = i === hero ? '#ff4f9a' : ['#ffb347', '#7b3cff', '#3fe0e8'][i % 3];
     ctx.fill();
   });
+}
+
+/** Marks each panel's look: 0 on the first panel (hero first) showing a photo, 1, 2, ... on its repeats. */
+function recountPhotoLooks() {
+  const seen = new Map();
+  panelsHeroFirst().forEach((i) => {
+    const crop = scene.panels[i];
+    if (crop.photo == null) return;
+    const n = seen.get(crop.photo) ?? 0;
+    crop.look = n;
+    seen.set(crop.photo, n + 1);
+  });
+}
+
+/** Puts photo `photoIndex` in the selected panel, framed like a first look (or the hero framing in the hero). */
+function swapPanelPhoto(photoIndex) {
+  const { w, h } = previewSize();
+  const isHero = computeCoverGeometry(scene, w, h).geometry.hero === scene.selected;
+  applyFocusCrop(scene.selected, photoIndex, isHero ? HERO_CROP : FIRST_LOOK_CROP, false);
+  refreshEditor();
 }
 
 function buildPickers() {
@@ -227,7 +288,12 @@ function buildPickers() {
     b.type = 'button';
     b.dataset.size = size.id;
     b.innerHTML = `${size.name}<small>${size.w}×${size.h}</small>`;
-    b.addEventListener('click', () => { scene.sizeId = size.id; refreshEditor(); });
+    b.addEventListener('click', () => {
+      scene.sizeId = size.id;
+      fitPreviewToStage();
+      reaimAutomaticCrops();
+      refreshEditor();
+    });
     sizePicker.append(b);
   });
   const layoutPicker = $('layoutPicker');
@@ -235,12 +301,12 @@ function buildPickers() {
     const b = document.createElement('button');
     b.type = 'button';
     b.dataset.layout = layout.id;
-    b.title = `${layout.name}: ${layout.cells.length} panels`;
+    b.title = `${layout.name}: ${layout.count} panels`;
     const thumb = document.createElement('canvas');
     thumb.width = 96;
-    thumb.height = 64;
+    thumb.height = 56;
     drawLayoutThumbnail(thumb, layout);
-    b.append(thumb, `${layout.cells.length} · ${layout.name}`);
+    b.append(thumb, `${layout.count} · ${layout.name}`);
     b.addEventListener('click', () => {
       scene.layoutId = layout.id;
       ensurePanelCrops();
@@ -280,22 +346,20 @@ function photoButton(photo, index, active, onPick) {
 /** Syncs every control with the scene and redraws. */
 function refreshEditor() {
   ensurePanelCrops();
+  recountPhotoLooks();
   const crop = scene.panels[scene.selected];
   document.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('active', b.dataset.size === scene.sizeId));
   document.querySelectorAll('[data-layout]').forEach((b) => b.classList.toggle('active', b.dataset.layout === scene.layoutId));
   document.querySelectorAll('[data-grade]').forEach((b) => b.classList.toggle('active', b.dataset.grade === scene.gradeId));
   const size = findSize(scene.sizeId);
   $('exportButton').textContent = `Export PNG ${size.w}×${size.h}`;
-  $('photoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, false, () => {
-    crop.photo = i;
-    refreshEditor();
-  })));
-  $('panelPhotoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, crop.photo === i, () => {
-    crop.photo = i;
-    refreshEditor();
-  })));
-  const hero = findLayout(scene.layoutId).hero === scene.selected ? ' (hero)' : '';
+  $('photoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, false, () => swapPanelPhoto(i))));
+  $('panelPhotoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, crop.photo === i, () => swapPanelPhoto(i))));
+  const { w, h } = previewSize();
+  const hero = computeCoverGeometry(scene, w, h).geometry.hero === scene.selected ? ' (hero)' : '';
   $('panelHeading').textContent = `Panel ${scene.selected + 1} of ${scene.panels.length}${hero}`;
+  const tagInput = $('roleTagInput');
+  if (document.activeElement !== tagInput) tagInput.value = resolveRoleTags({ ...scene, showTags: true })[scene.selected] ?? '';
   $('zoomSlider').value = String(crop.zoom);
   $('useSamples').hidden = scene.photos.length > 0;
   fitPreviewToStage();
@@ -336,6 +400,7 @@ function bindPanelPanZoom() {
     const clamp = (v) => Math.max(-1, Math.min(1, v));
     if (place.slackX > 0.5) crop.panX = clamp(drag.panX + (x - drag.x) / (place.slackX / 2));
     if (place.slackY > 0.5) crop.panY = clamp(drag.panY + (y - drag.y) / (place.slackY / 2));
+    crop.focus = null;
     scheduleRender();
   });
   const endDrag = () => { drag = null; preview.classList.remove('dragging'); };
@@ -349,6 +414,7 @@ function bindPanelPanZoom() {
     scene.selected = index;
     const crop = scene.panels[index];
     crop.zoom = Math.max(1, Math.min(4, crop.zoom * Math.exp(-event.deltaY * 0.0015)));
+    crop.focus = null;
     $('zoomSlider').value = String(crop.zoom);
     refreshEditor();
   }, { passive: false });
@@ -370,14 +436,41 @@ function bindPhotoDrop() {
 function bindControls() {
   $('photoInput').addEventListener('change', (e) => { addPhotoFiles(e.target.files); e.target.value = ''; });
   $('useSamples').addEventListener('click', addSamplePhotos);
-  const text = { captionInput: 'caption', taglineInput: 'tagline', badgeInput: 'badge' };
-  Object.entries(text).forEach(([id, key]) => $(id).addEventListener('input', (e) => { scene[key] = e.target.value; scheduleRender(); }));
-  $('titlePosition').addEventListener('change', (e) => { scene.titlePos = e.target.value; scheduleRender(); });
+  const text = {
+    captionInput: 'caption', taglineInput: 'tagline', badgeInput: 'badge', quoteInput: 'quote',
+    quoteSourceInput: 'quoteSource', creditsInput: 'credits', releaseInput: 'release',
+  };
+  Object.entries(text).forEach(([id, key]) => {
+    $(id).value = scene[key];
+    $(id).addEventListener('input', (e) => { scene[key] = e.target.value; scheduleRender(); });
+  });
+  const toggles = {
+    showBanner: 'showBanner', showTags: 'showTags', showBilling: 'showBilling', showSeal: 'showSeal', showBarcode: 'showBarcode',
+  };
+  Object.entries(toggles).forEach(([id, key]) => {
+    $(id).checked = scene[key];
+    $(id).addEventListener('change', (e) => {
+      scene[key] = e.target.checked;
+      reaimAutomaticCrops();
+      refreshEditor();
+    });
+  });
+  $('starsInput').value = String(scene.stars);
+  $('starsInput').addEventListener('change', (e) => { scene.stars = Number(e.target.value); scheduleRender(); });
+  $('roleTagInput').addEventListener('input', (e) => { scene.panels[scene.selected].tag = e.target.value; scheduleRender(); });
+  $('titlePosition').addEventListener('change', (e) => {
+    scene.titlePos = e.target.value;
+    reaimAutomaticCrops();
+    scheduleRender();
+  });
   const sliders = { gradeStrength: 'gradeStrength', glowAmount: 'glow', halftoneAmount: 'halftone', grainAmount: 'grain' };
   Object.entries(sliders).forEach(([id, key]) => $(id).addEventListener('input', (e) => { scene[key] = Number(e.target.value); scheduleRender(); }));
-  $('zoomSlider').addEventListener('input', (e) => { scene.panels[scene.selected].zoom = Number(e.target.value); scheduleRender(); });
+  $('zoomSlider').addEventListener('input', (e) => {
+    Object.assign(scene.panels[scene.selected], { zoom: Number(e.target.value), focus: null });
+    scheduleRender();
+  });
   $('resetCrop').addEventListener('click', () => {
-    Object.assign(scene.panels[scene.selected], { zoom: 1, panX: 0, panY: 0, flip: false });
+    Object.assign(scene.panels[scene.selected], { zoom: 1, panX: 0, panY: 0, flip: false, focus: null });
     refreshEditor();
   });
   $('flipPanel').addEventListener('click', () => { const c = scene.panels[scene.selected]; c.flip = !c.flip; refreshEditor(); });
