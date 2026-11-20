@@ -8,14 +8,32 @@ import { loadLetteringFonts } from './lettering.js';
 
 const PREVIEW_LONG_SIDE = 1200;
 const SAMPLE_PHOTOS = ['samples/boulevard.jpg', 'samples/pier.jpg'];
-// Crops given to the non-hero panels when one photo fills several, so the grid reads as different shots.
+// Crops given to the panels when one photo fills several, so the grid reads as different shots: a zoom and the
+// point of the photo (fx, fy as fractions) to centre. People photos keep the face in the upper-middle third, so
+// the close-ups aim there.
+const HERO_CROP = { zoom: 1, fx: 0.5, fy: 0.42 };
+const FIRST_LOOK_CROP = { zoom: 1.1, fx: 0.5, fy: 0.38 };
 const CROP_VARIETY = [
-  { zoom: 2.0, panX: 0.15, panY: -0.85 },
-  { zoom: 1.5, panX: -0.6, panY: -0.4 },
-  { zoom: 2.4, panX: 0.45, panY: -0.65 },
-  { zoom: 1.3, panX: 0.9, panY: -0.1 },
-  { zoom: 1.8, panX: -0.7, panY: -0.9 },
+  { zoom: 2.1, fx: 0.5, fy: 0.25 },
+  { zoom: 1.35, fx: 0.45, fy: 0.42 },
+  { zoom: 1.8, fx: 0.55, fy: 0.3 },
+  { zoom: 1.6, fx: 0.42, fy: 0.22 },
+  { zoom: 1.2, fx: 0.6, fy: 0.36 },
 ];
+
+/** Converts a focus crop into the panel's pan values, so the chosen point of the photo sits at the panel centre. */
+function applyFocusCrop(panelIndex, photoIndex, { zoom, fx, fy }, flip) {
+  const crop = scene.panels[panelIndex];
+  Object.assign(crop, { photo: photoIndex, zoom, panX: 0, panY: 0, flip });
+  const photo = scene.photos[photoIndex];
+  const { w, h } = previewSize();
+  const box = computePanelGeometry(findLayout(scene.layoutId), w, h, 0, 0).panels[panelIndex].box;
+  const place = computePhotoPlacement(photo.img, box, crop);
+  const clamp = (v) => Math.max(-1, Math.min(1, v));
+  const focusX = flip ? 1 - fx : fx;
+  if (place.slackX > 0.5) crop.panX = clamp((box.w / 2 - focusX * place.w + place.slackX / 2) / (place.slackX / 2));
+  if (place.slackY > 0.5) crop.panY = clamp((box.h / 2 - fy * place.h + place.slackY / 2) / (place.slackY / 2));
+}
 
 const scene = {
   photos: [],
@@ -63,8 +81,8 @@ function panelsHeroFirst() {
 /** Fills every panel with one photo, giving the smaller panels varied close-up crops. */
 export function fillAllPanelsWithPhoto(photoIndex) {
   panelsHeroFirst().forEach((panelIndex, k) => {
-    const variety = k === 0 ? { zoom: 1, panX: 0, panY: -0.2 } : CROP_VARIETY[(k - 1) % CROP_VARIETY.length];
-    Object.assign(scene.panels[panelIndex], { photo: photoIndex, flip: k % 3 === 2 }, variety);
+    const crop = k === 0 ? HERO_CROP : CROP_VARIETY[(k - 1) % CROP_VARIETY.length];
+    applyFocusCrop(panelIndex, photoIndex, crop, k % 3 === 2);
   });
 }
 
@@ -75,8 +93,10 @@ export function spreadPhotosAcrossPanels() {
   panelsHeroFirst().forEach((panelIndex, k) => {
     const photo = k % scene.photos.length;
     const round = Math.floor(k / scene.photos.length);
-    const variety = round === 0 ? { zoom: 1.05, panX: 0, panY: -0.3 } : CROP_VARIETY[(k + round) % CROP_VARIETY.length];
-    Object.assign(scene.panels[panelIndex], { photo, flip: false }, variety);
+    let crop = CROP_VARIETY[(k + round) % CROP_VARIETY.length];
+    if (k === 0) crop = HERO_CROP;
+    else if (round === 0) crop = FIRST_LOOK_CROP;
+    applyFocusCrop(panelIndex, photo, crop, round % 2 === 1);
   });
 }
 
@@ -313,9 +333,8 @@ function bindPanelPanZoom() {
     if (!photo) return;
     const [x, y] = canvasPoint(event);
     const place = computePhotoPlacement(photo.img, geometry.panels[drag.index].box, crop);
-    const flipSign = crop.flip ? -1 : 1;
     const clamp = (v) => Math.max(-1, Math.min(1, v));
-    if (place.slackX > 0.5) crop.panX = clamp(drag.panX + (flipSign * (x - drag.x)) / (place.slackX / 2));
+    if (place.slackX > 0.5) crop.panX = clamp(drag.panX + (x - drag.x) / (place.slackX / 2));
     if (place.slackY > 0.5) crop.panY = clamp(drag.panY + (y - drag.y) / (place.slackY / 2));
     scheduleRender();
   });

@@ -15,6 +15,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const outDir = process.argv[2] ?? join(root, 'screenshots');
 const pngDir = process.argv[3] ?? join(tmpdir(), 'heatwave-exports');
 mkdirSync(pngDir, { recursive: true });
+mkdirSync(outDir, { recursive: true });
 const PORT = 8123;
 const MAX_BYTES = 256 * 1024;
 
@@ -23,7 +24,7 @@ await new Promise((r) => setTimeout(r, 700));
 
 const COVERS = [
   { file: '3-cover-portrait.jpg', size: 'portrait', layout: 'six', grade: 'neon', caption: 'Boulevard\nQueen', tagline: 'Nights belong to her', badge: 'BQ', fit: [1024, 1280] },
-  { file: '4-cover-square.jpg', size: 'square', layout: 'trio', grade: 'golden', caption: 'Pier Pressure', tagline: 'The last cast', badge: 'PP', fit: [1080, 1080] },
+  { file: '4-cover-square.jpg', size: 'square', layout: 'trio', grade: 'dawn', caption: 'Pier Pressure', tagline: 'The last cast', badge: 'PP', fit: [1080, 1080] },
   { file: '1-cover.jpg', size: 'landscape', layout: 'five', grade: 'sunset', caption: 'Sunset Heist', tagline: 'Only in Palm Coast', badge: 'HW', fit: [1280, 720] },
 ];
 

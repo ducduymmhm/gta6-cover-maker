@@ -147,7 +147,7 @@ export function drawTaglineScript(ctx, text, title, w, h, grade, unit) {
   const textW = ctx.measureText(words).width;
   let x = box.cx + box.width * 0.42 - textW / 2;
   x = Math.min(Math.max(x, textW / 2 + w * 0.05), w - textW / 2 - w * 0.05);
-  const y = Math.min(box.bottom + size * 0.12, h - size * 0.55);
+  const y = Math.min(box.bottom + size * 0.12, h - size * 0.8);
   ctx.translate(x, y);
   ctx.rotate(-0.09);
   ctx.textAlign = 'center';
