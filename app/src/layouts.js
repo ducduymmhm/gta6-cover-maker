@@ -10,6 +10,79 @@ const RIGHT = V(1, 1);
 const TOP = H(0, 0);
 const BOTTOM = H(1, 1);
 
+/** A horizontal divider through two points (x0, y0) and (x1, y1), for short tilted cuts inside one column. */
+function horizontalThrough(x0, y0, x1, y1) {
+  const d = (y1 - y0) / (x1 - x0);
+  return { kind: 'h', c: y0 - d * x0, d };
+}
+
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/**
+ * Cast 9, landscape: the hero in the centre (37-41% of the width, full height, widening slightly toward the
+ * foot), a tall co-star either side, and three close-ups stacked in each outer column with alternately tilted
+ * cuts. The title zone is bottom-anchored over the lower third of the hero, so the faces at the top stay clear.
+ * Order: hero, the two co-stars, then the close-ups (left and right alternately, top to bottom).
+ */
+function buildCastNineWide() {
+  const v1 = V(0.149, 0.139);
+  const v2 = V(0.313, 0.296);
+  const v3 = V(0.687, 0.704);
+  const v4 = V(0.851, 0.861);
+  const leftCuts = [horizontalThrough(0, 0.345, 0.15, 0.318), horizontalThrough(0, 0.655, 0.15, 0.68)];
+  const rightCuts = [horizontalThrough(0.85, 0.318, 1, 0.345), horizontalThrough(0.85, 0.68, 1, 0.655)];
+  const leftRows = [TOP, ...leftCuts, BOTTOM];
+  const rightRows = [TOP, ...rightCuts, BOTTOM];
+  const cells = [[v2, v3, TOP, BOTTOM], [v1, v2, TOP, BOTTOM], [v3, v4, TOP, BOTTOM]];
+  for (let r = 0; r < 3; r++) {
+    cells.push([LEFT, v1, leftRows[r], leftRows[r + 1]]);
+    cells.push([v4, RIGHT, rightRows[r], rightRows[r + 1]]);
+  }
+  return {
+    hero: 0,
+    cells,
+    kinds: ['hero', 'costar', 'costar', 'small', 'small', 'small', 'small', 'small', 'small'],
+    titleZone: { cx: 0.5, w: 0.5, h: 0.44, lines: 'stack' },
+  };
+}
+
+/**
+ * Cast 9, square and portrait: a row of four close-ups across the top, then the hero in the centre running from
+ * under that row down to the billing block, a co-star and a close-up stacked on each side. The sides stop at the
+ * title zone, so the title spreads over the hero's lower third and the dark ground beside it, never a face.
+ * `aspect` (panel area width / height) tunes the row heights between portrait (~0.93) and square (~1.2).
+ */
+function buildCastNineStacked(aspect) {
+  const t = clamp01((aspect - 0.93) / (1.21 - 0.93));
+  const rowCut = lerp(0.205, 0.245, t);
+  const sideCut = lerp(0.47, 0.5, t);
+  const sideFloor = lerp(0.705, 0.715, t);
+  const top = horizontalThrough(0, rowCut + 0.008, 1, rowCut - 0.008);
+  const v2 = V(0.272, 0.258);
+  const v3 = V(0.728, 0.742);
+  const row = [V(0.256, 0.244), V(0.505, 0.495), V(0.744, 0.756)];
+  const leftCut = horizontalThrough(0, sideCut + 0.012, 0.27, sideCut - 0.012);
+  const rightCut = horizontalThrough(0.73, sideCut - 0.012, 1, sideCut + 0.012);
+  const floor = horizontalThrough(0, sideFloor, 1, sideFloor - 0.006);
+  return {
+    hero: 0,
+    cells: [
+      [v2, v3, top, BOTTOM],
+      [LEFT, v2, top, leftCut],
+      [v3, RIGHT, top, rightCut],
+      [LEFT, row[0], TOP, top],
+      [row[2], RIGHT, TOP, top],
+      [row[0], row[1], TOP, top],
+      [row[1], row[2], TOP, top],
+      [LEFT, v2, leftCut, floor],
+      [v3, RIGHT, rightCut, floor],
+    ],
+    kinds: ['hero', 'costar', 'costar', 'small', 'small', 'small', 'small', 'small', 'small'],
+    titleZone: { cx: 0.5, w: lerp(0.8, 0.74, t), h: 1 - sideFloor - 0.01 },
+  };
+}
+
 /** Where a vertical divider (x = a + b*y) crosses a horizontal one (y = c + d*x). */
 function intersectDividers(v, h) {
   const y = (h.c + h.d * v.a) / (1 - h.d * v.b);
@@ -73,6 +146,13 @@ function buildStackedCastCells(lowCount) {
  * ones; their hero is always panel 0, so a size change never moves the lead photo.
  */
 export const PANEL_LAYOUTS = [
+  {
+    id: 'nine',
+    name: 'Cast 9',
+    count: 9,
+    heroTitle: true,
+    build: (aspect) => (aspect >= 1.6 ? buildCastNineWide() : buildCastNineStacked(aspect)),
+  },
   {
     id: 'eight',
     name: 'Ensemble',
@@ -186,8 +266,8 @@ export function insetPolygon(points, distance) {
  * panel's polygon (gutters cut) and bounding box, and which panel is the hero. `gutter` is the gap between panels.
  */
 export function computePanelGeometry(layout, area, gutter) {
-  const { hero, cells } = layout.build(area.w / area.h);
-  const panels = cells.map(([l, r, t, b]) => {
+  const { hero, cells, kinds, titleZone } = layout.build(area.w / area.h);
+  const panels = cells.map(([l, r, t, b], i) => {
     const corners = [intersectDividers(l, t), intersectDividers(r, t), intersectDividers(r, b), intersectDividers(l, b)]
       .map(([x, y]) => [area.x + x * area.w, area.y + y * area.h]);
     const polygon = insetPolygon(corners, gutter / 2);
@@ -196,9 +276,10 @@ export function computePanelGeometry(layout, area, gutter) {
     const box = { x: Math.min(...xs), y: Math.min(...ys) };
     box.w = Math.max(...xs) - box.x;
     box.h = Math.max(...ys) - box.y;
-    return { polygon, box };
+    const kind = kinds?.[i] ?? (i === hero ? 'hero' : 'panel');
+    return { polygon, box, kind };
   });
-  return { panels, hero };
+  return { panels, hero, titleZone: titleZone ?? null };
 }
 
 /** Ray-casting point-in-polygon test, used to pick the panel under the pointer. */

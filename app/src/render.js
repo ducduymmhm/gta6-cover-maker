@@ -1,14 +1,18 @@
-// renderCover: the whole key-art cover, in order: photos in their tilted cast-grid panels, gradient-map grade, sky
-// wash, light leaks, halftone, bloom, the dark poster ground, the fade into the title zone, role tags, the review
-// banner, the stacked title and script tagline, the billing block (seal, credits, release line, barcode) and film
-// grain. The same function draws the live preview (at a reduced size) and the full-resolution export.
+// renderCover: the whole key-art cover, in order: the dark poster ground, photos in their tilted cast-grid panels
+// (each auto-levelled, then gradient-mapped to the grade), sky wash, light leaks, halftone, drop shadows, the hero's
+// neon rim, the title scrim, poster light leaks, bloom, vignette, role tags, the review banner, the stacked title
+// and script tagline, the billing block (seal, credits, release line, barcode) and film grain. The same function draws the live preview
+// (at a reduced size) and the full-resolution export.
 import { computePanelGeometry, findLayout, tracePolygon } from './layouts.js';
 import { findGrade } from './grades.js';
-import { addBloomGlow, addFilmGrain, applyColorGrade, applyHalftone, applySkyWash, drawPanelLightLeaks } from './effects.js';
+import {
+  addBloomGlow, addFilmGrain, applyHalftone, applyPosterVignette, applySkyWash, drawPanelLightLeaks, drawPosterLightLeaks,
+  gradePanelTile,
+} from './effects.js';
 import { drawStripedTitle, drawTaglineScript } from './lettering.js';
 import {
-  computeKeyArtFrame, drawBillingBlock, drawKeyArtBackdrop, drawReviewBanner, drawRoleTags, drawSealBadge,
-  drawTitleHaze, fadePanelBottoms,
+  computeKeyArtFrame, drawBillingBlock, drawHeroSpotlight, drawKeyArtBackdrop, drawReviewBanner, drawRoleTags,
+  drawSealBadge, drawTitleHaze, drawTitleScrim, fadePanelBottoms,
 } from './keyart.js';
 
 /** Cover size presets: the three common post sizes. */
@@ -26,7 +30,23 @@ export function findSize(id) {
 export function computeCoverGeometry(scene, w, h) {
   const plan = computeKeyArtFrame(scene, w, h);
   const geometry = computePanelGeometry(findLayout(scene.layoutId), plan.area, plan.gutter);
+  if (geometry.titleZone && (scene.titlePos ?? 'auto') === 'auto') placeTitleOverHero(plan, geometry);
   return { plan, geometry };
+}
+
+/**
+ * Bottom-anchors the title box in the layout's title zone: centred on the hero, its foot just above the billing
+ * block, so the lettering covers the hero's lower third and never the faces above it.
+ */
+function placeTitleOverHero(plan, geometry) {
+  const { area, unit } = plan;
+  const zone = geometry.titleZone;
+  const tw = area.w * zone.w;
+  const th = area.h * zone.h;
+  // Leave room under the title's foot for the script tagline that crosses it.
+  const bottom = area.y + area.h - (plan.billing ? 34 : 64) * unit;
+  plan.title = { cx: area.x + area.w * zone.cx, cy: bottom - th / 2, w: tw, h: th, anchor: 'bottom', lines: zone.lines };
+  plan.titleOverHero = true;
 }
 
 /** Where a photo lands in a panel: cover-fit to the panel's bounding box, then the panel's zoom and pan. */
@@ -62,27 +82,51 @@ function drawEmptyPanel(ctx, box, index, unit) {
   ctx.fillText(`PHOTO ${index + 1}`, box.x + box.w / 2, box.y + box.h * 0.45);
 }
 
-/** Draws every panel's photo (or placeholder) clipped to its tilted polygon. */
-export function drawPanelGrid(ctx, geometry, scene, unit) {
+/** Draws one panel's photo (or placeholder) clipped to its tilted polygon, in cover coordinates. */
+function drawPanelPhoto(ctx, panel, crop, photo, index, unit) {
+  ctx.save();
+  tracePolygon(ctx, panel.polygon);
+  ctx.clip();
+  if (photo) {
+    const place = computePhotoPlacement(photo.img, panel.box, crop);
+    ctx.imageSmoothingQuality = 'high';
+    if (crop.flip) {
+      ctx.translate(place.x * 2 + place.w, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(photo.img, place.x, place.y, place.w, place.h);
+  } else {
+    drawEmptyPanel(ctx, panel.box, index, unit);
+  }
+  ctx.restore();
+}
+
+/**
+ * Draws and grades every panel on its own tile (so each photo gets its own auto-levels before the shared
+ * gradient map), then lays the tiles onto `layer`. Returns the cover-sized luminance map for the halftone.
+ */
+export function drawGradedPanels(layer, geometry, scene, grade, unit, w, h) {
+  const luma = new Uint8Array(w * h);
   geometry.panels.forEach((panel, i) => {
     const crop = scene.panels[i] ?? { photo: null, zoom: 1, panX: 0, panY: 0 };
     const photo = crop.photo == null ? null : scene.photos[crop.photo];
-    ctx.save();
-    tracePolygon(ctx, panel.polygon);
-    ctx.clip();
-    if (photo) {
-      const place = computePhotoPlacement(photo.img, panel.box, crop);
-      ctx.imageSmoothingQuality = 'high';
-      if (crop.flip) {
-        ctx.translate(place.x * 2 + place.w, 0);
-        ctx.scale(-1, 1);
-      }
-      ctx.drawImage(photo.img, place.x, place.y, place.w, place.h);
-    } else {
-      drawEmptyPanel(ctx, panel.box, i, unit);
-    }
-    ctx.restore();
+    const x0 = Math.max(0, Math.floor(panel.box.x));
+    const y0 = Math.max(0, Math.floor(panel.box.y));
+    const tw = Math.min(w, Math.ceil(panel.box.x + panel.box.w)) - x0;
+    const th = Math.min(h, Math.ceil(panel.box.y + panel.box.h)) - y0;
+    if (tw <= 0 || th <= 0) return;
+    const tile = document.createElement('canvas');
+    tile.width = tw;
+    tile.height = th;
+    const tctx = tile.getContext('2d', { willReadFrequently: true });
+    tctx.translate(-x0, -y0);
+    drawPanelPhoto(tctx, panel, crop, photo, i, unit);
+    const image = tctx.getImageData(0, 0, tw, th);
+    gradePanelTile(image, grade, scene.gradeStrength, luma, w, x0, y0);
+    tctx.putImageData(image, 0, 0);
+    layer.drawImage(tile, x0, y0);
   });
+  return luma;
 }
 
 /** The role tag each panel shows: its own edited tag, else its photo's role on the photo's first panel. */
@@ -96,8 +140,11 @@ export function resolveRoleTags(scene) {
 }
 
 /**
- * Renders the cover described by `scene` onto `ctx` at w x h. Returns the panel geometry (for hit-testing and
- * the selection outline in the editor).
+ * Renders the cover described by `scene` onto `ctx` at w x h: the dark poster ground; the graded cast grid on its
+ * own layer (sky wash, panel light leaks, halftone), dropped onto the ground with a soft shadow; the hero's neon
+ * rim; the scrim under the title, poster-wide light leaks, bloom and vignette; then, crisp on top, the role tags,
+ * the review banner, the title and tagline, the billing block and the film grain. Returns the panel geometry
+ * (for hit-testing and the selection outline in the editor).
  */
 export function renderCover(ctx, scene, w, h) {
   const grade = findGrade(scene.gradeId);
@@ -106,21 +153,36 @@ export function renderCover(ctx, scene, w, h) {
 
   ctx.save();
   ctx.clearRect(0, 0, w, h);
-  drawPanelGrid(ctx, geometry, scene, unit);
-  const luma = applyColorGrade(ctx, w, h, grade, scene.gradeStrength);
-  ctx.save();
-  ctx.beginPath();
-  geometry.panels.forEach(({ polygon }) => polygon.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))));
-  ctx.clip();
-  applySkyWash(ctx, w, h, grade, scene.gradeStrength);
-  ctx.restore();
-  drawPanelLightLeaks(ctx, geometry.panels, grade, scene.glow);
-  applyHalftone(ctx, w, h, luma, unit, grade, scene.halftone * 0.55, geometry.panels);
-  addBloomGlow(ctx, w, h, unit, scene.glow);
-  fadePanelBottoms(ctx, w, plan);
   drawKeyArtBackdrop(ctx, w, h, plan, grade);
+
+  const layerCanvas = document.createElement('canvas');
+  layerCanvas.width = w;
+  layerCanvas.height = h;
+  const layer = layerCanvas.getContext('2d', { willReadFrequently: true });
+  const luma = drawGradedPanels(layer, geometry, scene, grade, unit, w, h);
+  layer.save();
+  layer.beginPath();
+  geometry.panels.forEach(({ polygon }) => polygon.forEach(([x, y], i) => (i ? layer.lineTo(x, y) : layer.moveTo(x, y))));
+  layer.clip();
+  applySkyWash(layer, w, h, grade, scene.gradeStrength);
+  layer.restore();
+  drawPanelLightLeaks(layer, geometry.panels, grade, scene.glow);
+  applyHalftone(layer, w, h, luma, unit, grade, scene.halftone * 0.55, geometry.panels);
+  fadePanelBottoms(layer, w, plan);
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = 26 * unit;
+  ctx.shadowOffsetY = 9 * unit;
+  ctx.drawImage(layerCanvas, 0, 0);
+  ctx.restore();
+  drawHeroSpotlight(ctx, geometry, grade, unit);
+  if (plan.titleOverHero) drawTitleScrim(ctx, plan, geometry);
+  drawPosterLightLeaks(ctx, w, h, grade, scene.glow);
+  addBloomGlow(ctx, w, h, unit, scene.glow);
+  applyPosterVignette(ctx, w, h, 0.5);
   drawTitleHaze(ctx, w, plan, grade);
-  drawRoleTags(ctx, geometry, resolveRoleTags(scene), grade, unit);
+  drawRoleTags(ctx, geometry, resolveRoleTags(scene), grade, unit, w);
   if (plan.banner) drawReviewBanner(ctx, plan.banner, scene, grade, unit);
 
   const title = drawStripedTitle(ctx, scene.caption, plan.title, grade, unit);

@@ -26,7 +26,7 @@ export function splitTitleLines(text) {
   if (!clean) return [];
   if (clean.includes('\n')) return clean.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 3);
   const words = clean.split(/\s+/);
-  if (words.length < 2 || clean.length < 8) return [clean];
+  if (words.length < 2) return [clean];
   let best = [clean];
   let bestDiff = Infinity;
   for (let i = 1; i < words.length; i++) {
@@ -43,8 +43,20 @@ export function splitTitleLines(text) {
  * until it fits the title box's height. Returns the lines, their font sizes and the cap-height ratio of the font.
  */
 export function fitStackedTitle(ctx, text, box) {
-  const lines = splitTitleLines(text);
-  if (!lines.length) return null;
+  const stacked = splitTitleLines(text);
+  if (!stacked.length) return null;
+  // A caption with no line break of its own may also run as one line: keep whichever puts more lettering on
+  // the poster (a wide, shallow title box favours one line, a squarer one the stack).
+  if (stacked.length === 2 && !text.includes('\n') && box.lines !== 'stack') {
+    const single = fitTitleLines(ctx, [stacked.join(' ')], box);
+    const double = fitTitleLines(ctx, stacked, box);
+    return single.ink > double.ink * 1.15 ? single : double;
+  }
+  return fitTitleLines(ctx, stacked, box);
+}
+
+/** Fits the given lines into the box (see fitStackedTitle); `ink` is the area the lettering covers. */
+function fitTitleLines(ctx, lines, box) {
   ctx.font = `100px "${TITLE_FONT}"`;
   const capRatio = ctx.measureText('H').actualBoundingBoxAscent / 100;
   const unitWidths = lines.map((line) => ctx.measureText(line).width / 100);
@@ -56,7 +68,8 @@ export function fitStackedTitle(ctx, text, box) {
   const heightBudget = lines.length === 1 ? box.h * 0.62 : box.h;
   const fit = Math.min(1, heightBudget / blockHeight(sizes));
   sizes = sizes.map((s) => s * fit);
-  return { lines, sizes, capRatio, unitWidths, height: blockHeight(sizes) };
+  const ink = sizes.reduce((sum, s, i) => sum + s * capRatio * s * unitWidths[i], 0);
+  return { lines, sizes, capRatio, unitWidths, height: blockHeight(sizes), ink };
 }
 
 /**
@@ -126,8 +139,11 @@ export function drawStripedTitle(ctx, text, box, grade, unit) {
     return base;
   });
 
+  // A bottom-anchored box (the title over the hero) keeps the block's foot on the box's foot, so a short caption
+  // drops down onto the hero's lower third instead of floating up toward the faces.
+  const cy = box.anchor === 'bottom' ? box.cy + (box.h - height) / 2 - sizes[sizes.length - 1] * 0.08 : box.cy;
   ctx.save();
-  ctx.translate(box.cx, box.cy);
+  ctx.translate(box.cx, cy);
   ctx.rotate(TITLE_TILT);
   ctx.transform(1, 0, TITLE_SKEW, 1, 0, 0);
   ctx.textAlign = 'center';
@@ -198,8 +214,8 @@ export function drawStripedTitle(ctx, text, box, grade, unit) {
   return {
     size: sizes[last],
     width: widest,
-    top: box.cy - height / 2,
-    bottom: box.cy + height / 2 + sizes[last] * 0.1,
+    top: cy - height / 2,
+    bottom: cy + height / 2 + sizes[last] * 0.1,
     cx: box.cx,
   };
 }
@@ -212,17 +228,18 @@ export function drawTaglineScript(ctx, text, title, w, h, grade, unit, maxY = h)
   const words = text.trim();
   if (!words) return;
   const box = title ?? { size: h * 0.2, width: w * 0.6, bottom: h * 0.85, cx: w / 2 };
-  let size = Math.max(16 * unit, Math.min(box.size * 0.4, 96 * unit));
+  let size = Math.max(30 * unit, Math.min(box.size * 0.3, 62 * unit));
   ctx.save();
   ctx.font = `${size}px "${SCRIPT_FONT}"`;
-  const maxW = Math.min(w * 0.8, box.width * 1.05);
+  const maxW = Math.min(w * 0.6, Math.max(box.width * 0.9, w * 0.34));
   const measured = ctx.measureText(words).width;
   if (measured > maxW) size *= maxW / measured;
   ctx.font = `${size}px "${SCRIPT_FONT}"`;
   const textW = ctx.measureText(words).width;
   let x = box.cx + box.width * 0.5 - textW / 2 + size * 0.4;
   x = Math.min(Math.max(x, textW / 2 + w * 0.04), w - textW / 2 - w * 0.04);
-  const y = Math.min(box.bottom - size * 0.05, maxY - size * 0.75);
+  // Across the title's foot: a little over the last line's base, mostly below it.
+  const y = Math.min(box.bottom + size * 0.2, maxY - size * 0.62);
   ctx.translate(x, y);
   ctx.rotate(-0.08);
   ctx.textAlign = 'center';

@@ -91,3 +91,10 @@ label.check input { accent-color: var(--hot); margin: 0; }
 #selectionOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .hint { margin: 0; color: var(--muted); font-size: 12px; }
 .status { color: var(--sea); min-height: 18px; margin: 8px 0 0; }
+.hero-chip { position: absolute; transform: translate(-50%, -50%); z-index: 2; border: 0; padding: 7px 13px; border-radius: 999px;
+  font: 14px "Anton", sans-serif; letter-spacing: 0.8px; color: #1a0620; white-space: nowrap;
+  background: linear-gradient(90deg, #fff2a0, var(--sun) 45%, var(--hot)); box-shadow: 0 4px 16px #000c, 0 0 14px #ff4f9a99; }
+.hero-chip:hover { filter: brightness(1.12); }
+.hero-button { width: 100%; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--sun); background: #2a1430; color: #ffe6b0;
+  font: 14px "Anton", sans-serif; letter-spacing: 0.6px; }
+.hero-button:disabled { opacity: 0.4; cursor: default; border-color: var(--line); }

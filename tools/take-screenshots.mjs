@@ -1,10 +1,10 @@
 // Takes the entry's screenshots by driving the real editor in Chromium (Playwright, not a dependency of the app):
-// serves app/ with serve.ts, loads four photos of four different people through the app's file input (the app
-// deals them across the cast grid itself), picks layout, grade and size, types the caption, clicks Export and
-// keeps the PNG the app downloaded, then scales that PNG to a JPEG under 256 KiB.
+// serves app/ with serve.ts, loads nine photos of nine different people through the app's file input in one go
+// (the app deals them one per panel, the first to the hero), picks layout, grade and size, types the caption,
+// clicks Export and keeps the PNG the app downloaded, then scales that PNG to a JPEG under 256 KiB.
 // Usage: node tools/take-screenshots.mjs <photoDir> [outDir] [pngDir]
-//   photoDir holds driver.jpg, mech.jpg, boulevard.jpg and pier.jpg (free-to-use, AI-generated people; they are
-//   read from there and never copied into the repository). Defaults: screenshots/ and out/exports/.
+//   photoDir holds the nine photos named in CAST_PHOTOS (free-to-use, AI-generated people; they are read from
+//   there and never copied into the repository). Defaults: screenshots/ and out/exports/.
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -22,24 +22,29 @@ mkdirSync(pngDir, { recursive: true });
 mkdirSync(outDir, { recursive: true });
 const PORT = 8123;
 const MAX_BYTES = 256 * 1024;
-const PHOTOS = ['driver.jpg', 'mech.jpg', 'boulevard.jpg', 'pier.jpg'].map((f) => join(photoDir, f));
+// Load order = panel order: the first is the hero, the next two the co-stars, the rest the close-ups (rider.jpg
+// is small, so it goes last, into a close-up).
+const CAST_PHOTOS = [
+  'driver.jpg', 'pilot.jpg', 'boss.jpg', 'speedboat.jpg', 'nightclub.jpg', 'mech.jpg', 'boulevard.jpg', 'pier.jpg', 'rider.jpg',
+];
+const PHOTOS = CAST_PHOTOS.map((f) => join(photoDir, f));
 
 const server = spawn(process.execPath, [join(root, 'serve.ts'), '--port', String(PORT)], { stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 700));
 
 const COVERS = [
   {
-    file: '3-cover-portrait.jpg', size: 'portrait', layout: 'eight', grade: 'neon', caption: 'Neon Tide',
+    file: '3-cover-portrait.jpg', size: 'portrait', layout: 'nine', grade: 'neon', caption: 'Neon Tide',
     tagline: 'Nobody sleeps in Palm Coast', badge: 'NT', release: 'Coming soon', fit: [1024, 1280],
     quote: 'The crime saga of the summer', source: 'Night Owl Weekly',
   },
   {
-    file: '4-cover-square.jpg', size: 'square', layout: 'seven', grade: 'golden', caption: 'Pier Pressure',
+    file: '4-cover-square.jpg', size: 'square', layout: 'nine', grade: 'golden', caption: 'Pier Pressure',
     tagline: 'One last score', badge: 'PP', release: 'Summer 2027', fit: [1080, 1080],
     quote: 'Pure golden-hour mayhem', source: 'Coastline Review',
   },
   {
-    file: '1-cover.jpg', size: 'landscape', layout: 'eight', grade: 'sunset', caption: 'Sunset Heist',
+    file: '1-cover.jpg', size: 'landscape', layout: 'nine', grade: 'sunset', caption: 'Sunset Heist',
     tagline: 'Only in Palm Coast', badge: 'HW', release: 'Coming soon', fit: [1280, 720],
     quote: 'A sun-soaked, neon-drenched thrill ride', source: 'Palm Coast Herald',
   },
@@ -107,11 +112,12 @@ try {
     console.log(`${cover.file}: from ${download.suggestedFilename()}, ${jpeg.length} bytes`);
   }
 
-  // The editor at work on the landscape cover just exported: a side panel selected and reframed by dragging.
+  // The editor at work on the landscape cover just exported: a co-star panel selected (its "Make hero" chip
+  // showing) and nudged by dragging.
   const box = await page.locator('#coverPreview').boundingBox();
-  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.3);
+  await page.mouse.move(box.x + box.width * 0.23, box.y + box.height * 0.3);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.255, box.y + box.height * 0.32, { steps: 4 });
+  await page.mouse.move(box.x + box.width * 0.232, box.y + box.height * 0.305, { steps: 4 });
   await page.mouse.up();
   await page.waitForTimeout(400);
   for (let q = 88; q > 30; q -= 4) {

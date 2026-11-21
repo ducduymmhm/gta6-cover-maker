@@ -1,44 +1,127 @@
 // Image effects for the poster look: gradient-map colour grade, sky wash, per-panel light leaks, halftone print
 // dots, bloom glow, vignette and film grain. Every effect is deterministic, so the preview matches the export.
-import { buildGradientMapLut } from './grades.js';
+import { buildGradientMapLut, hexWithAlpha } from './grades.js';
 import { tracePolygon } from './layouts.js';
 
 const lutCache = new Map();
 
-/**
- * Gradient-maps the opaque pixels of the canvas through the grade's palette, blended with the original colour by
- * `strength`, with an S-curve on luminance for punch. Returns a luminance array (0..255) for the halftone pass.
- */
-export function applyColorGrade(ctx, w, h, grade, strength) {
-  if (!lutCache.has(grade.id)) lutCache.set(grade.id, buildGradientMapLut(grade.stops));
-  const lut = lutCache.get(grade.id);
-  const image = ctx.getImageData(0, 0, w, h);
-  const px = image.data;
-  const luma = new Uint8Array(w * h);
-  const mix = Math.min(1, grade.mix * strength);
-  const keep = 1 - mix;
-  const k = grade.contrast;
+/** The S-curve on luminance a grade's contrast asks for, as a 256-entry table. */
+function buildContrastCurve(contrast) {
   const curve = new Uint8Array(256);
   for (let i = 0; i < 256; i++) {
     const t = i / 255;
-    const stretched = Math.max(0, Math.min(1, (t - 0.5) * k + 0.5));
+    const stretched = Math.max(0, Math.min(1, (t - 0.5) * contrast + 0.5));
     const c = stretched * stretched * (3 - 2 * stretched) * 0.7 + stretched * 0.3;
     curve[i] = Math.max(0, Math.min(255, Math.round(c * 255)));
   }
-  for (let i = 0, p = 0; p < px.length; i++, p += 4) {
+  return curve;
+}
+
+/**
+ * Auto-levels for one photo: stretches its 1st-99th luminance percentiles to the full range and bends the
+ * mid-tones so its mean lands near 0.46. A dark club shot and a bright beach shot then enter the gradient map
+ * with the same tonal spread, which is what makes very different photos read as one graded poster.
+ */
+function buildPanelLevels(px) {
+  const hist = new Uint32Array(256);
+  let count = 0;
+  for (let p = 0; p < px.length; p += 16) {
+    if (px[p + 3] < 200) continue;
+    hist[(px[p] * 77 + px[p + 1] * 150 + px[p + 2] * 29) >> 8]++;
+    count++;
+  }
+  const levels = new Uint8Array(256);
+  if (count < 32) { for (let i = 0; i < 256; i++) levels[i] = i; return levels; }
+  let lo = 0;
+  let hi = 255;
+  let seen = 0;
+  for (let i = 0; i < 256; i++) { seen += hist[i]; if (seen >= count * 0.01) { lo = i; break; } }
+  seen = 0;
+  for (let i = 255; i >= 0; i--) { seen += hist[i]; if (seen >= count * 0.01) { hi = i; break; } }
+  if (hi - lo < 40) { const mid = (hi + lo) / 2; lo = Math.max(0, mid - 20); hi = Math.min(255, mid + 20); }
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += hist[i] * Math.max(0, Math.min(1, (i - lo) / (hi - lo)));
+  const mean = Math.max(0.05, Math.min(0.95, sum / count));
+  const gamma = Math.max(0.55, Math.min(1.6, Math.log(0.46) / Math.log(mean)));
+  for (let i = 0; i < 256; i++) {
+    const t = Math.max(0, Math.min(1, (i - lo) / (hi - lo)));
+    levels[i] = Math.round(Math.pow(t, gamma) * 255);
+  }
+  return levels;
+}
+
+/**
+ * Grades one panel's pixels (an RGBA tile cut to the panel): its own auto-levels, then the grade's contrast
+ * curve and gradient map, blended with the levelled colour by `strength`. Writes each pixel's graded luminance
+ * into `luma` (cover-sized, for the halftone pass) at the tile's offset (ox, oy).
+ */
+export function gradePanelTile(image, grade, strength, luma, coverWidth, ox, oy) {
+  if (!lutCache.has(grade.id)) lutCache.set(grade.id, buildGradientMapLut(grade.stops));
+  const lut = lutCache.get(grade.id);
+  const px = image.data;
+  const levels = buildPanelLevels(px);
+  const curve = buildContrastCurve(grade.contrast);
+  const mix = Math.min(1, grade.mix * strength);
+  const keep = 1 - mix;
+  const tw = image.width;
+  for (let p = 0, i = 0; p < px.length; p += 4, i++) {
     if (px[p + 3] === 0) continue;
-    const r = px[p];
-    const g = px[p + 1];
-    const b = px[p + 2];
+    const r = levels[px[p]];
+    const g = levels[px[p + 1]];
+    const b = levels[px[p + 2]];
     const l = curve[(r * 77 + g * 150 + b * 29) >> 8];
-    luma[i] = l;
     const o = l * 3;
     px[p] = r * keep + lut[o] * mix;
     px[p + 1] = g * keep + lut[o + 1] * mix;
     px[p + 2] = b * keep + lut[o + 2] * mix;
+    const x = ox + (i % tw);
+    const y = oy + ((i / tw) | 0);
+    if (x >= 0 && x < coverWidth) luma[y * coverWidth + x] = l;
   }
-  ctx.putImageData(image, 0, 0);
-  return luma;
+}
+
+/**
+ * Sunlight leaking into the camera across the whole poster: a warm flare from the upper left, a magenta bleed
+ * from the right edge and a faint diagonal streak, screened on so they only ever brighten.
+ */
+export function drawPosterLightLeaks(ctx, w, h, grade, amount) {
+  if (amount <= 0) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  const flare = ctx.createRadialGradient(w * 0.04, h * 0.02, 0, w * 0.04, h * 0.02, Math.max(w, h) * 0.42);
+  flare.addColorStop(0, hexWithAlpha(grade.titleSun[1], 0.42 * amount));
+  flare.addColorStop(0.45, hexWithAlpha(grade.titleSun[2], 0.14 * amount));
+  flare.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = flare;
+  ctx.fillRect(0, 0, w, h);
+  const bleed = ctx.createRadialGradient(w * 1.02, h * 0.55, 0, w * 1.02, h * 0.55, Math.max(w, h) * 0.38);
+  bleed.addColorStop(0, hexWithAlpha(grade.accents[0], 0.34 * amount));
+  bleed.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bleed;
+  ctx.fillRect(0, 0, w, h);
+  const streak = ctx.createLinearGradient(w * 0.18, 0, w * 0.42, h);
+  streak.addColorStop(0, 'rgba(0,0,0,0)');
+  streak.addColorStop(0.47, 'rgba(0,0,0,0)');
+  streak.addColorStop(0.5, hexWithAlpha(grade.titleSun[0], 0.1 * amount));
+  streak.addColorStop(0.53, 'rgba(0,0,0,0)');
+  streak.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = streak;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+/** A soft oval vignette over the whole cover, pulling the eye to the centre. */
+export function applyPosterVignette(ctx, w, h, strength) {
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.scale(w / Math.min(w, h), h / Math.min(w, h));
+  const r = Math.min(w, h) * 0.72;
+  const v = ctx.createRadialGradient(0, 0, r * 0.45, 0, 0, r);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, `rgba(0,0,0,${strength})`);
+  ctx.fillStyle = v;
+  ctx.fillRect(-r * 2, -r * 2, r * 4, r * 4);
+  ctx.restore();
 }
 
 /** A top-to-bottom wash in the grade's sky colours, soft-lit over the panels only. */
@@ -93,7 +176,7 @@ export function drawPanelLightLeaks(ctx, panels, grade, strength) {
 
 /**
  * Print-style halftone: a 45-degree dot screen whose dots grow in the shadows, inked in the grade's dark colour
- * and stronger toward the bottom of the cover. `luma` comes from applyColorGrade.
+ * and stronger toward the bottom of the cover. `luma` comes from gradePanelTile.
  */
 export function applyHalftone(ctx, w, h, luma, unit, grade, amount, panels) {
   if (amount <= 0) return;

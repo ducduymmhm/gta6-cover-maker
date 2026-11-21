@@ -14,8 +14,14 @@ const SAMPLE_PHOTOS = ['samples/boulevard.jpg', 'samples/pier.jpg'];
 // than photos, each repeat of a photo takes a "second look" from a different part of the frame (a prop or car in
 // the lower corner, a sign or palms in the upper corner, a tight close-up of the face), so no two panels show the
 // same shot.
-const HERO_CROP = { zoom: 1, fx: 0.5, fy: 0.4 };
+// `ax`, `ay` say where in the panel the focus lands (default the centre): the hero keeps the face in its upper
+// third, so the title can cover its lower third; co-stars and close-ups put the face a little above the middle,
+// leaving the shoulders for the role tag.
+const HERO_CROP = { zoom: 1, fx: 0.5, fy: 0.3, ay: 0.3 };
+const CO_STAR_CROP = { zoom: 1.04, fx: 0.5, fy: 0.3, ay: 0.34 };
+const CLOSE_UP_CROP = { zoom: 1.15, fx: 0.5, fy: 0.26, ay: 0.46 };
 const FIRST_LOOK_CROP = { zoom: 1.1, fx: 0.5, fy: 0.36 };
+const CROP_FOR_PANEL_KIND = { hero: HERO_CROP, costar: CO_STAR_CROP, small: CLOSE_UP_CROP, panel: FIRST_LOOK_CROP };
 const SECOND_LOOK_CROPS = [
   { zoom: 2.0, fx: 0.8, fy: 0.78 },
   { zoom: 1.7, fx: 0.24, fy: 0.16 },
@@ -45,8 +51,10 @@ function aimCropAtFocus(panelIndex) {
   const place = computePhotoPlacement(photo.img, box, crop);
   const clamp = (v) => Math.max(-1, Math.min(1, v));
   const focusX = crop.flip ? 1 - crop.focus.fx : crop.focus.fx;
-  if (place.slackX > 0.5) crop.panX = clamp((box.w / 2 - focusX * place.w + place.slackX / 2) / (place.slackX / 2));
-  if (place.slackY > 0.5) crop.panY = clamp((box.h / 2 - crop.focus.fy * place.h + place.slackY / 2) / (place.slackY / 2));
+  const anchorX = box.w * (crop.focus.ax ?? 0.5);
+  const anchorY = box.h * (crop.focus.ay ?? 0.5);
+  if (place.slackX > 0.5) crop.panX = clamp((anchorX - focusX * place.w + place.slackX / 2) / (place.slackX / 2));
+  if (place.slackY > 0.5) crop.panY = clamp((anchorY - crop.focus.fy * place.h + place.slackY / 2) / (place.slackY / 2));
 }
 
 /** Re-aims every panel still on its automatic crop (after a size change moves the panel shapes). */
@@ -57,7 +65,7 @@ function reaimAutomaticCrops() {
 const scene = {
   photos: [],
   panels: [],
-  layoutId: 'eight',
+  layoutId: 'nine',
   gradeId: 'sunset',
   sizeId: 'landscape',
   caption: 'Sunset Heist',
@@ -71,7 +79,8 @@ const scene = {
   showTags: true,
   showBilling: true,
   credits: 'Heatwave Pictures presents in association with Neon Tide a Palm Coast production\n'
-    + 'starring The Driver The Mechanic The Lookout The Boss music by Night Signal edited by J. Park directed by M. Vale',
+    + 'starring The Driver The Pilot The Boss The Captain The Night Owl The Mechanic The Fixer The Lookout The Rider\n'
+    + 'music by Night Signal edited by J. Park written and directed by M. Vale',
   release: 'Coming soon',
   showSeal: true,
   showBarcode: true,
@@ -101,12 +110,48 @@ function ensurePanelCrops() {
   scene.selected = Math.min(scene.selected, count - 1);
 }
 
+/** The cast-grid geometry at the preview size (hero index, each panel's kind and box). */
+function previewGeometry() {
+  const { w, h } = previewSize();
+  return computeCoverGeometry(scene, w, h).geometry;
+}
+
 /** Panel indices with the hero first, so the first photo always lands in the biggest panel. */
 function panelsHeroFirst() {
-  const { w, h } = previewSize();
-  const { hero } = computeCoverGeometry(scene, w, h).geometry;
+  const { hero } = previewGeometry();
   const order = scene.panels.map((_, i) => i).filter((i) => i !== hero);
   return [hero, ...order];
+}
+
+/** The automatic framing for a panel: hero, co-star, close-up or (other layouts) a first look. */
+function cropForPanel(panelIndex) {
+  const geometry = previewGeometry();
+  const kind = panelIndex === geometry.hero ? 'hero' : geometry.panels[panelIndex]?.kind ?? 'panel';
+  return CROP_FOR_PANEL_KIND[kind] ?? FIRST_LOOK_CROP;
+}
+
+/**
+ * Promotes the photo in `panelIndex` to the hero panel: the two panels trade photos, role tags and flips, and
+ * both are reframed for their new slot (unless that photo has none, in which case it stays empty).
+ */
+export function promotePanelToHero(panelIndex) {
+  const { hero } = previewGeometry();
+  if (panelIndex === hero || !scene.panels[panelIndex] || !scene.panels[hero]) return;
+  const chosen = scene.panels[panelIndex];
+  const lead = scene.panels[hero];
+  const swap = [
+    [hero, chosen.photo, chosen.tag, chosen.flip],
+    [panelIndex, lead.photo, lead.tag, lead.flip],
+  ];
+  for (const [index, photo, tag, flip] of swap) {
+    if (photo == null) Object.assign(scene.panels[index], { photo: null, zoom: 1, panX: 0, panY: 0, focus: null });
+    else applyFocusCrop(index, photo, cropForPanel(index), Boolean(flip));
+    scene.panels[index].tag = tag;
+  }
+  scene.selected = hero;
+  const name = scene.photos[chosen.photo]?.name;
+  setStatus(name ? `${name} is now the hero.` : 'Hero swapped.');
+  refreshEditor();
 }
 
 /** Fills every panel with one photo: the hero framed whole, the rest as distinct close-ups and details. */
@@ -130,8 +175,7 @@ export function spreadPhotosAcrossPanels() {
     const photo = k % scene.photos.length;
     const round = Math.floor(k / scene.photos.length);
     let crop = SECOND_LOOK_CROPS[(photo + round - 1) % SECOND_LOOK_CROPS.length];
-    if (k === 0) crop = HERO_CROP;
-    else if (round === 0) crop = FIRST_LOOK_CROP;
+    if (round === 0) crop = cropForPanel(panelIndex);
     applyFocusCrop(panelIndex, photo, crop, false);
     Object.assign(scene.panels[panelIndex], { look: round, tag: undefined });
   });
@@ -201,6 +245,7 @@ export function scheduleRender() {
     renderQueued = false;
     geometry = renderCover(previewCtx, scene, preview.width, preview.height);
     drawSelectionOverlay();
+    placeHeroChip();
   });
 }
 
@@ -221,6 +266,21 @@ function drawSelectionOverlay() {
   ctx.strokeStyle = '#ffffff';
   ctx.stroke();
   ctx.restore();
+}
+
+/**
+ * Floats the "Make hero" chip over the selected panel's lower middle on the preview (hidden on the hero itself
+ * and on empty panels). It is a page element, never drawn into the cover.
+ */
+function placeHeroChip() {
+  const chip = $('heroChip');
+  const panel = geometry?.panels[scene.selected];
+  const crop = scene.panels[scene.selected];
+  if (!panel || scene.selected === geometry.hero || crop?.photo == null) { chip.hidden = true; return; }
+  const scale = preview.clientWidth / preview.width;
+  chip.hidden = false;
+  chip.style.left = `${(panel.box.x + panel.box.w / 2) * scale}px`;
+  chip.style.top = `${(panel.box.y + panel.box.h * 0.5) * scale}px`;
 }
 
 /* ---------- export ---------- */
@@ -275,9 +335,7 @@ function recountPhotoLooks() {
 
 /** Puts photo `photoIndex` in the selected panel, framed like a first look (or the hero framing in the hero). */
 function swapPanelPhoto(photoIndex) {
-  const { w, h } = previewSize();
-  const isHero = computeCoverGeometry(scene, w, h).geometry.hero === scene.selected;
-  applyFocusCrop(scene.selected, photoIndex, isHero ? HERO_CROP : FIRST_LOOK_CROP, false);
+  applyFocusCrop(scene.selected, photoIndex, cropForPanel(scene.selected), false);
   refreshEditor();
 }
 
@@ -355,9 +413,9 @@ function refreshEditor() {
   $('exportButton').textContent = `Export PNG ${size.w}×${size.h}`;
   $('photoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, false, () => swapPanelPhoto(i))));
   $('panelPhotoTray').replaceChildren(...scene.photos.map((p, i) => photoButton(p, i, crop.photo === i, () => swapPanelPhoto(i))));
-  const { w, h } = previewSize();
-  const hero = computeCoverGeometry(scene, w, h).geometry.hero === scene.selected ? ' (hero)' : '';
-  $('panelHeading').textContent = `Panel ${scene.selected + 1} of ${scene.panels.length}${hero}`;
+  const isHero = previewGeometry().hero === scene.selected;
+  $('panelHeading').textContent = `Panel ${scene.selected + 1} of ${scene.panels.length}${isHero ? ' · hero' : ''}`;
+  $('makeHero').disabled = isHero || crop.photo == null;
   const tagInput = $('roleTagInput');
   if (document.activeElement !== tagInput) tagInput.value = resolveRoleTags({ ...scene, showTags: true })[scene.selected] ?? '';
   $('zoomSlider').value = String(crop.zoom);
@@ -480,7 +538,9 @@ function bindControls() {
   });
   $('spreadPhotos').addEventListener('click', () => { spreadPhotosAcrossPanels(); refreshEditor(); });
   $('exportButton').addEventListener('click', exportPng);
-  window.addEventListener('resize', () => { fitPreviewToStage(); });
+  $('makeHero').addEventListener('click', () => promotePanelToHero(scene.selected));
+  $('heroChip').addEventListener('click', () => promotePanelToHero(scene.selected));
+  window.addEventListener('resize', () => { fitPreviewToStage(); placeHeroChip(); });
 }
 
 async function startEditor() {

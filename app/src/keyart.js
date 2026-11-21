@@ -5,10 +5,12 @@
 import { TITLE_FONT } from './lettering.js';
 import { hexWithAlpha, mixHexColors } from './grades.js';
 import { mulberry32 } from './effects.js';
+import { findLayout, tracePolygon } from './layouts.js';
 
 /** Default role tags, dealt to each loaded photo in order (one person, one role). Every tag stays editable. */
 export const DEFAULT_ROLE_TAGS = [
-  'THE DRIVER', 'THE MECHANIC', 'THE LOOKOUT', 'THE BOSS', 'THE FIXER', 'THE INSIDE MAN', 'THE ROOKIE', 'THE WITNESS',
+  'THE DRIVER', 'THE PILOT', 'THE BOSS', 'THE CAPTAIN', 'THE NIGHT OWL', 'THE MECHANIC', 'THE FIXER', 'THE LOOKOUT',
+  'THE RIDER',
 ];
 
 /** Words a billing block sets small and high, between the larger names. */
@@ -27,14 +29,17 @@ export function computeKeyArtFrame(scene, w, h) {
   const unit = Math.min(w, h) / 1080;
   const aspect = w / h;
   const frame = Math.round(14 * unit);
-  const gutter = Math.round(11 * unit);
+  const gutter = Math.max(3, Math.round(9 * unit));
   const bannerH = scene.showBanner ? Math.round(58 * unit) : 0;
   const billingH = scene.showBilling ? Math.round((aspect > 1.4 ? 112 : 128) * unit) : 0;
   const wide = aspect > 1.4;
   // Square and landscape covers run the cast grid all the way down to the billing block; a portrait cover stops
   // it partway down the title. Either way only a soft window around the title is dissolved, so the side columns
   // keep framing the lettering and no face sits under it.
-  const gridToFloor = aspect >= 0.95;
+  // A hero-title layout (Cast 9) always runs to the billing block: its title is placed over the hero later, from
+  // the layout's own title zone, and nothing is dissolved.
+  const heroTitle = Boolean(findLayout(scene.layoutId).heroTitle);
+  const gridToFloor = aspect >= 0.95 || heroTitle;
   const titleW = w * (wide ? 0.6 : gridToFloor ? 0.74 : 0.78);
   const titleH = h * (wide ? 0.39 : gridToFloor ? 0.3 : 0.25);
   const floor = h - frame - billingH;
@@ -43,6 +48,7 @@ export function computeKeyArtFrame(scene, w, h) {
   let titleCy = titleBottom - titleH / 2;
   let panelBottom = gridToFloor ? floor - (billingH ? gutter * 0.5 : 0) : titleBottom - titleH * 0.42;
   let fade = { top: titleBottom - titleH * (gridToFloor ? 0.86 : 0.95), bottom: panelBottom, span: titleW * 1.04, soft: w * 0.1 };
+  if (heroTitle) fade = null;
   if (scene.titlePos === 'top' || scene.titlePos === 'center') {
     panelBottom = floor - (billingH ? gutter * 0.5 : 0);
     titleCy = scene.titlePos === 'top' ? top + titleH * 0.62 : (top + panelBottom) / 2;
@@ -114,6 +120,69 @@ export function fadePanelBottoms(ctx, w, plan) {
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.drawImage(mask, 0, Math.floor(fade.top));
+  ctx.restore();
+}
+
+/**
+ * Depth for the cast grid: a hairline light rim on every panel, then the hero lifted above the others with a
+ * neon glow spilling into the gutters and a brighter sunset rim, so the eye lands on the centre first.
+ */
+export function drawHeroSpotlight(ctx, geometry, grade, unit) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,2,16,0.16)';
+  geometry.panels.forEach((panel, i) => {
+    if (i === geometry.hero) return;
+    tracePolygon(ctx, panel.polygon);
+    ctx.fill();
+  });
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(1, 1.4 * unit);
+  ctx.strokeStyle = 'rgba(255,240,230,0.28)';
+  geometry.panels.forEach((panel, i) => {
+    if (i === geometry.hero) return;
+    tracePolygon(ctx, panel.polygon);
+    ctx.stroke();
+  });
+  const hero = geometry.panels[geometry.hero];
+  if (hero) {
+    tracePolygon(ctx, hero.polygon);
+    ctx.shadowColor = grade.titleGlow;
+    ctx.shadowBlur = 34 * unit;
+    ctx.lineWidth = 3.5 * unit;
+    ctx.strokeStyle = hexWithAlpha(grade.titleGlow, 0.9);
+    ctx.stroke();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    const rim = ctx.createLinearGradient(hero.box.x, hero.box.y, hero.box.x + hero.box.w * 0.4, hero.box.y + hero.box.h);
+    rim.addColorStop(0, grade.titleSun[0]);
+    rim.addColorStop(0.5, grade.titleSun[1]);
+    rim.addColorStop(1, grade.titleSun[2]);
+    ctx.lineWidth = 2.5 * unit;
+    ctx.strokeStyle = rim;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * Darkens the cast grid under the title (an oval centred on the title box, deepest at its foot), so the lettering
+ * reads against the hero's lower third without a hard band.
+ */
+export function drawTitleScrim(ctx, plan, geometry) {
+  const t = plan.title;
+  ctx.save();
+  ctx.beginPath();
+  geometry.panels.forEach(({ polygon }) => polygon.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))));
+  ctx.clip();
+  ctx.translate(t.cx, t.cy + t.h * 0.2);
+  ctx.scale(1, (t.h * 1.25) / (t.w * 0.62));
+  const r = t.w * 0.62;
+  const shade = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+  shade.addColorStop(0, 'rgba(6,2,12,0.72)');
+  shade.addColorStop(0.55, 'rgba(6,2,12,0.5)');
+  shade.addColorStop(1, 'rgba(6,2,12,0)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(-r, -r, r * 2, r * 2);
   ctx.restore();
 }
 
@@ -217,16 +286,24 @@ export function drawReviewBanner(ctx, rect, scene, grade, unit) {
   ctx.restore();
 }
 
+/** The y of a polygon edge from p to q at x (clamped to the edge's ends). */
+function edgeYAt(p, q, x) {
+  const t = Math.max(0, Math.min(1, (x - p[0]) / Math.max(1e-6, q[0] - p[0])));
+  return p[1] + (q[1] - p[1]) * t;
+}
+
 /**
- * Role tags: a small label in the top-left corner of each tagged panel, a numbered accent chip and the role in
- * spaced caps, clipped to the panel so it never spills into a gutter. The hero's tag is a size larger.
+ * Role tags, one style everywhere: a dark plate with a numbered accent chip, the role in spaced condensed caps
+ * and an accent underline. Each tag sits in its panel's lower outer corner (left half of the cover: bottom-left;
+ * right half: bottom-right), over the shoulders and away from the faces and the title; the hero's tag, a size
+ * larger, sits at the top centre of the hero. Every tag follows its panel's tilted edge and is clipped to it.
  */
-export function drawRoleTags(ctx, geometry, tags, grade, unit) {
+export function drawRoleTags(ctx, geometry, tags, grade, unit, coverWidth) {
   geometry.panels.forEach((panel, i) => {
     const label = (tags[i] ?? '').trim().toUpperCase();
     if (!label) return;
     const hero = i === geometry.hero;
-    let size = (hero ? 25 : 20) * unit;
+    let size = (hero ? 24 : 19) * unit;
     const number = String(i + 1).padStart(2, '0');
     ctx.save();
     const measure = (s) => {
@@ -234,40 +311,48 @@ export function drawRoleTags(ctx, geometry, tags, grade, unit) {
       ctx.letterSpacing = `${(s * 0.12).toFixed(1)}px`;
       const nameW = ctx.measureText(label).width;
       const numW = ctx.measureText(number).width;
-      return { nameW, numW, total: numW + s * 0.9 + nameW + s * 1.0 };
+      return { nameW, numW, total: numW + s * 0.9 + nameW + s * 0.9 };
     };
     let m = measure(size);
-    const room = panel.box.w - 26 * unit;
+    const inset = 12 * unit;
+    const room = panel.box.w - inset * 3;
     if (m.total > room) { size *= room / m.total; m = measure(size); }
-    // Follow the panel's slanted top edge: start below wherever it sits at the tag's far end.
-    const [px, py] = panel.polygon[0];
-    const [qx, qy] = panel.polygon[1];
-    const x = px + 12 * unit;
-    const edgeAtEnd = py + ((qy - py) * (x + m.total - px)) / Math.max(1, qx - px);
-    const y = Math.max(py, edgeAtEnd) + 11 * unit;
-    const tagH = size * 1.6;
-    ctx.beginPath();
-    panel.polygon.forEach(([qx, qy], k) => (k ? ctx.lineTo(qx, qy) : ctx.moveTo(qx, qy)));
-    ctx.closePath();
+    const tagH = size * 1.62;
+    const [tl, tr, br, bl] = panel.polygon;
+    let x;
+    let y;
+    if (hero) {
+      x = panel.box.x + (panel.box.w - m.total) / 2;
+      y = Math.max(edgeYAt(tl, tr, x), edgeYAt(tl, tr, x + m.total)) + inset * 1.2;
+    } else {
+      const onLeft = panel.box.x + panel.box.w / 2 < coverWidth / 2;
+      // Keep clear of the slanted side edge as well as the bottom one.
+      const sideIn = onLeft
+        ? Math.max(tl[0], bl[0]) + inset
+        : Math.min(tr[0], br[0]) - inset - m.total;
+      x = sideIn;
+      y = Math.min(edgeYAt(bl, br, x), edgeYAt(bl, br, x + m.total)) - inset - tagH;
+    }
+    tracePolygon(ctx, panel.polygon);
     ctx.clip();
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = 8 * unit;
-    ctx.fillStyle = 'rgba(8,4,12,0.86)';
+    const accent = hero ? grade.titleSun[0] : grade.accents[i % grade.accents.length];
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 10 * unit;
+    ctx.shadowOffsetY = 2 * unit;
+    ctx.fillStyle = 'rgba(8,4,12,0.88)';
     ctx.fillRect(x, y, m.total, tagH);
-    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
     const chipW = m.numW + size * 0.9;
-    const accent = grade.accents[i % grade.accents.length];
-    ctx.fillStyle = hero ? grade.titleSun[0] : accent;
+    ctx.fillStyle = accent;
     ctx.fillRect(x, y, chipW, tagH);
+    ctx.fillRect(x + chipW, y + tagH - 2 * unit, m.total - chipW, 2 * unit);
     ctx.textBaseline = 'middle';
     ctx.font = `${size}px "${TITLE_FONT}"`;
     ctx.letterSpacing = `${(size * 0.12).toFixed(1)}px`;
     ctx.fillStyle = '#0a0410';
-    ctx.fillText(number, x + size * 0.45, y + tagH * 0.53);
+    ctx.fillText(number, x + size * 0.45, y + tagH * 0.52);
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(label, x + chipW + size * 0.5, y + tagH * 0.53);
-    ctx.fillStyle = hero ? grade.titleSun[0] : accent;
-    ctx.fillRect(x + chipW, y + tagH - 2 * unit, m.total - chipW, 2 * unit);
+    ctx.fillText(label, x + chipW + size * 0.45, y + tagH * 0.52);
     ctx.restore();
   });
 }
