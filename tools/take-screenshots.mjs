@@ -119,6 +119,11 @@ try {
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.232, box.y + box.height * 0.305, { steps: 4 });
   await page.mouse.up();
+  await page.evaluate(() => {
+    document.querySelector('.sidebar.left').scrollTop = 0;
+    const right = document.querySelector('.sidebar.right');
+    right.scrollTop = document.getElementById('panelHeading').closest('section').offsetTop - right.offsetTop;
+  });
   await page.waitForTimeout(400);
   for (let q = 88; q > 30; q -= 4) {
     const shot = await page.screenshot({ type: 'jpeg', quality: q });

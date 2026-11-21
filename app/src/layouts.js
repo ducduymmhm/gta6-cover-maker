@@ -43,7 +43,7 @@ function buildCastNineWide() {
     hero: 0,
     cells,
     kinds: ['hero', 'costar', 'costar', 'small', 'small', 'small', 'small', 'small', 'small'],
-    titleZone: { cx: 0.5, w: 0.5, h: 0.44, lines: 'stack' },
+    titleZone: { cx: 0.5, w: 0.5, h: 0.47, lines: 'stack' },
   };
 }
 

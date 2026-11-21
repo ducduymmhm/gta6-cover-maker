@@ -42,9 +42,11 @@ function placeTitleOverHero(plan, geometry) {
   const { area, unit } = plan;
   const zone = geometry.titleZone;
   const tw = area.w * zone.w;
-  const th = area.h * zone.h;
-  // Leave room under the title's foot for the script tagline that crosses it.
-  const bottom = area.y + area.h - (plan.billing ? 34 : 64) * unit;
+  // Leave room under the title's foot for the script tagline that crosses it; the zone's top edge stays put, so
+  // the title never climbs into the panels above the zone.
+  const reserve = (plan.billing ? 34 : 64) * unit;
+  const th = area.h * zone.h - reserve;
+  const bottom = area.y + area.h - reserve;
   plan.title = { cx: area.x + area.w * zone.cx, cy: bottom - th / 2, w: tw, h: th, anchor: 'bottom', lines: zone.lines };
   plan.titleOverHero = true;
 }
@@ -182,7 +184,7 @@ export function renderCover(ctx, scene, w, h) {
   addBloomGlow(ctx, w, h, unit, scene.glow);
   applyPosterVignette(ctx, w, h, 0.5);
   drawTitleHaze(ctx, w, plan, grade);
-  drawRoleTags(ctx, geometry, resolveRoleTags(scene), grade, unit, w);
+  drawRoleTags(ctx, geometry, resolveRoleTags(scene), grade, unit, w, plan.title);
   if (plan.banner) drawReviewBanner(ctx, plan.banner, scene, grade, unit);
 
   const title = drawStripedTitle(ctx, scene.caption, plan.title, grade, unit);

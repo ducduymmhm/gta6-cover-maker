@@ -139,6 +139,7 @@ export function promotePanelToHero(panelIndex) {
   if (panelIndex === hero || !scene.panels[panelIndex] || !scene.panels[hero]) return;
   const chosen = scene.panels[panelIndex];
   const lead = scene.panels[hero];
+  const name = scene.photos[chosen.photo]?.name;
   const swap = [
     [hero, chosen.photo, chosen.tag, chosen.flip],
     [panelIndex, lead.photo, lead.tag, lead.flip],
@@ -149,7 +150,6 @@ export function promotePanelToHero(panelIndex) {
     scene.panels[index].tag = tag;
   }
   scene.selected = hero;
-  const name = scene.photos[chosen.photo]?.name;
   setStatus(name ? `${name} is now the hero.` : 'Hero swapped.');
   refreshEditor();
 }
@@ -280,7 +280,7 @@ function placeHeroChip() {
   const scale = preview.clientWidth / preview.width;
   chip.hidden = false;
   chip.style.left = `${(panel.box.x + panel.box.w / 2) * scale}px`;
-  chip.style.top = `${(panel.box.y + panel.box.h * 0.5) * scale}px`;
+  chip.style.top = `${(panel.box.y + panel.box.h * 0.64) * scale}px`;
 }
 
 /* ---------- export ---------- */

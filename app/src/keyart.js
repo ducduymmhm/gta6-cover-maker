@@ -296,9 +296,11 @@ function edgeYAt(p, q, x) {
  * Role tags, one style everywhere: a dark plate with a numbered accent chip, the role in spaced condensed caps
  * and an accent underline. Each tag sits in its panel's lower outer corner (left half of the cover: bottom-left;
  * right half: bottom-right), over the shoulders and away from the faces and the title; the hero's tag, a size
- * larger, sits at the top centre of the hero. Every tag follows its panel's tilted edge and is clipped to it.
+ * larger, sits at the top centre of the hero. A tag whose lower corner would fall under the title box (`titleBox`,
+ * the plan's {cx, cy, w, h}) moves to the panel's upper outer corner instead. Every tag follows its panel's tilted
+ * edge and is clipped to it.
  */
-export function drawRoleTags(ctx, geometry, tags, grade, unit, coverWidth) {
+export function drawRoleTags(ctx, geometry, tags, grade, unit, coverWidth, titleBox) {
   geometry.panels.forEach((panel, i) => {
     const label = (tags[i] ?? '').trim().toUpperCase();
     if (!label) return;
@@ -332,6 +334,10 @@ export function drawRoleTags(ctx, geometry, tags, grade, unit, coverWidth) {
         : Math.min(tr[0], br[0]) - inset - m.total;
       x = sideIn;
       y = Math.min(edgeYAt(bl, br, x), edgeYAt(bl, br, x + m.total)) - inset - tagH;
+      const underTitle = titleBox
+        && x < titleBox.cx + titleBox.w / 2 && x + m.total > titleBox.cx - titleBox.w / 2
+        && y + tagH > titleBox.cy - titleBox.h / 2 && y < titleBox.cy + titleBox.h / 2;
+      if (underTitle) y = Math.max(edgeYAt(tl, tr, x), edgeYAt(tl, tr, x + m.total)) + inset;
     }
     tracePolygon(ctx, panel.polygon);
     ctx.clip();
